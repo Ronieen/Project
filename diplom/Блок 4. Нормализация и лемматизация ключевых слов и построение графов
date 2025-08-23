@@ -1,0 +1,148 @@
+import pandas as pd
+import networkx as nx
+from itertools import combinations
+from collections import defaultdict, Counter
+import spacy
+from tqdm import tqdm
+
+# Загружаем модель spaCy для лемматизации
+nlp = spacy.load("en_core_web_sm", disable=["ner", "parser"])
+tqdm.pandas()
+
+# Нормализация ключевых слов
+
+def normalize_keywords_hybrid(keywords):
+    if not keywords or not isinstance(keywords, list):
+        return []
+
+    parsed_phrases = []
+
+    for phrase in keywords:
+        doc = nlp(phrase.lower())
+        tokens = [
+            token.lemma_
+            for token in doc
+            if token.pos_ in {"NOUN", "ADJ", "PROPN"}
+            and token.is_alpha
+            and not token.is_stop
+        ]
+        if tokens:
+            parsed_phrases.append((" ".join(tokens), set(tokens)))
+
+    # Многословные термины имеют приоритет
+    multiword_tokens = {
+        token
+        for _, tokens in parsed_phrases
+        if len(tokens) > 1
+        for token in tokens
+    }
+
+    final_phrases = []
+    for text, tokens in parsed_phrases:
+        # Убираем однословные, если они входят в состав более длинных терминов
+        if len(tokens) == 1 and next(iter(tokens)) in multiword_tokens:
+            continue
+        final_phrases.append(text)
+
+    return sorted(set(final_phrases))
+
+df["Extracted Keywords"] = df["Extracted Keywords"].apply(
+    lambda x: x if isinstance(x, list) else []
+)
+df["Normalized Keywords"] = df["Extracted Keywords"].progress_apply(normalize_keywords_hybrid)
+
+# Граф научного соавторства (co-authorship graph)
+
+G_auth = nx.Graph()
+
+for authors in df["Authors"]:
+    if not isinstance(authors, list) or len(authors) < 2:
+        continue
+
+    clean_authors = list(set(a.strip() for a in authors if a.strip()))
+    for a1, a2 in combinations(clean_authors, 2):
+        if G_auth.has_edge(a1, a2):
+            G_auth[a1][a2]["weight"] += 1
+        else:
+            G_auth.add_edge(a1, a2, weight=1)
+
+G_auth.remove_nodes_from([n for n in G_auth.nodes if not n.strip()])
+nx.write_graphml(G_auth, "graph_coauthorship.graphml")
+
+# Граф ключевых слов из столбца Keywords (raw)
+
+G_kw = nx.Graph()
+
+for keywords in df["Keywords"]:
+    for k1, k2 in combinations(set(keywords), 2):
+        G_kw.add_edge(k1, k2)
+
+nx.write_graphml(G_kw, "graph_keywords_column.graphml")
+
+# Метаграф взаимодействия тематических сообществ (meta)
+
+keyword_to_community = {}
+community_keywords = defaultdict(list)
+
+for community in df["Keyword Communities"]:
+    for keyword, comm_id in community:
+        keyword_to_community[keyword] = comm_id
+        community_keywords[comm_id].append(keyword)
+
+# Создаем имена сообществ из первых трёх ключевых слов
+community_names = {
+    comm_id: ", ".join(keywords[:3])
+    for comm_id, keywords in community_keywords.items()
+}
+
+G_meta = nx.Graph()
+
+for keywords in df["Normalized Keywords"]:
+    communities_in_article = set()
+    for kw in keywords:
+        if kw in keyword_to_community:
+            comm_id = keyword_to_community[kw]
+            label = community_names.get(comm_id, str(comm_id))
+            communities_in_article.add(label)
+
+    for c1, c2 in combinations(communities_in_article, 2):
+        if G_meta.has_edge(c1, c2):
+            G_meta[c1][c2]["weight"] += 1
+        else:
+            G_meta.add_edge(c1, c2, weight=1)
+
+nx.write_graphml(G_meta, "graph_community_interactions_named.graphml")
+
+# Граф нормализованных ключевых слов (top 10 000)
+
+all_keywords = [kw for keywords in df["Normalized Keywords"] for kw in keywords]
+keyword_counts = Counter(all_keywords)
+top_keywords = set([kw for kw, _ in keyword_counts.most_common(10000)])
+
+G_nkw_top = nx.Graph()
+
+for keywords in df["Normalized Keywords"]:
+    filtered = [kw for kw in keywords if kw in top_keywords]
+    for k1, k2 in combinations(set(filtered), 2):
+        G_nkw_top.add_edge(k1, k2)
+
+nx.write_graphml(G_nkw_top, "graph_normalized_keywords_top10000.graphml")
+
+# Двудольный граф авторы ↔ нормализованные ключевые слова
+
+B_graph = nx.Graph()
+
+for _, row in df.iterrows():
+    authors = row["Authors"]
+    keywords = [kw for kw in row["Normalized Keywords"] if kw in top_keywords]
+
+    for author in authors:
+        B_graph.add_node(author, bipartite=0)
+    for kw in keywords:
+        B_graph.add_node(kw, bipartite=1)
+
+    for author in authors:
+        for kw in keywords:
+            B_graph.add_edge(author, kw)
+
+nx.write_graphml(B_graph, "graph_competence_bipartite_top10000.graphml")
