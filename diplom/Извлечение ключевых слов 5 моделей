@@ -1,0 +1,86 @@
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from tqdm import tqdm
+
+# 1. Вспомогательные функции для каждой модели
+
+def extract_keywords_yake(text):
+    # Здесь остаётся твоя реализация YAKE
+    return yake_extractor(text)
+
+def extract_keywords_spacy(text):
+    # Здесь остаётся твоя реализация spaCy
+    return spacy_extractor(text)
+
+def extract_keywords_textrank(text):
+    # Здесь остаётся твоя реализация TextRank
+    return textrank_extractor(text)
+
+def extract_keywords_keybert(text):
+    # Здесь остаётся твоя реализация KeyBERT
+    return keybert_extractor(text)
+
+# 2. Обработка одного батча
+
+def process_batch(batch_df, methods):
+    results = {method: [] for method in methods}
+    for _, row in batch_df.iterrows():
+        text = row['Abstract']
+
+        if 'YAKE' in methods:
+            results['YAKE'].append(extract_keywords_yake(text))
+        if 'spaCy' in methods:
+            results['spaCy'].append(extract_keywords_spacy(text))
+        if 'TextRank' in methods:
+            results['TextRank'].append(extract_keywords_textrank(text))
+        if 'KeyBERT' in methods:
+            results['KeyBERT'].append(extract_keywords_keybert(text))
+
+    return results
+
+# 3. Обработка всего датасета батчами
+
+def process_data_in_batches(df, batch_size=1000, methods=None):
+    if methods is None:
+        methods = ['YAKE', 'spaCy', 'TextRank', 'KeyBERT']
+
+    results = {method: [] for method in methods}
+    num_batches = (len(df) + batch_size - 1) // batch_size  # Округляем вверх
+
+    print("Processing data in batches...")
+
+    for i in tqdm(range(num_batches), desc="Processing batches"):
+        batch_df = df.iloc[i * batch_size:(i + 1) * batch_size]
+        batch_results = process_batch(batch_df, methods)
+
+        for method in methods:
+            results[method].extend(batch_results[method])
+
+    return results
+
+# 4. Запускаем извлечение ключевых слов
+
+methods_to_use = ['YAKE', 'spaCy', 'TextRank', 'KeyBERT']
+batch_size = 1000
+
+results = process_data_in_batches(cleaned_df, batch_size=batch_size, methods=methods_to_use)
+
+# 5. Добавляем результаты в DataFrame
+
+for method in methods_to_use:
+    cleaned_df[method] = results[method]
+
+# 6. TF-IDF как отдельная модель
+
+tfidf_vectorizer = TfidfVectorizer(stop_words='english')
+tfidf_matrix = tfidf_vectorizer.fit_transform(cleaned_df['Abstract'])
+feature_names = tfidf_vectorizer.get_feature_names_out()
+
+tfidf_keywords = []
+for row in tfidf_matrix:
+    row_array = row.toarray().flatten()
+    sorted_indices = row_array.argsort()[::-1]  # Сортируем по убыванию значений TF-IDF
+    keywords = [feature_names[i] for i in sorted_indices if row_array[i] > 0]
+    tfidf_keywords.append(keywords)
+
+cleaned_df['TF-IDF Keywords'] = tfidf_keywords
