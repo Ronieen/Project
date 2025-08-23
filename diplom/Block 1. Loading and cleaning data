@@ -1,0 +1,31 @@
+import pandas as pd
+import re
+
+# === Функция очистки колонки Abstract ===
+def clean_abstract_column(df):
+    column_name = 'Abstract'
+    df = df.drop_duplicates(subset=[column_name]).dropna(subset=[column_name])
+    df = df[df[column_name].str.strip().str.len() > 10]
+    df[column_name] = df[column_name].apply(lambda x: re.sub(r'<.*?>', '', x))
+    df = df[~df[column_name].str.contains(r'<jats:p>|&lt;', regex=True)]
+    df[column_name] = df[column_name].apply(lambda x: re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', x))
+    return df
+
+# === Функция подготовки данных ===
+def process_data(file_path):
+    df = pd.read_csv(file_path)
+    key_columns = ['Author/s', 'Abstract', 'Source Country', 'Keywords']
+    df = df[key_columns]
+    df.dropna(subset=['Author/s', 'Source Country'], inplace=True)
+    df = df[~(df['Abstract'].isna() & df['Keywords'].isna())]
+    df.drop_duplicates(inplace=True)
+    df = clean_abstract_column(df)
+    if df.empty:
+        raise ValueError("После очистки данных DataFrame пуст. Проверьте исходные данные.")
+    return df
+
+input_file_path = r"E:\delete\lens-export.csv"
+cleaned_df = process_data(input_file_path)
+
+print(f"Размер данных после очистки: {cleaned_df.shape}")
+print(cleaned_df.head())
